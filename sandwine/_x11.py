@@ -1,20 +1,3 @@
-# This file is part of the sandwine project.
-#
-# Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-#
-# sandwine is free software: you can redistribute it and/or modify it under
-# the terms of the GNU General Public License as published by the Free
-# Software Foundation, either version 3 of the License, or (at your option)
-# any later version.
-#
-# sandwine is distributed in the hope that it will be useful, but WITHOUT
-# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
-# more details.
-#
-# You should have received a copy of the GNU General Public License along
-# with sandwine. If not, see <https://www.gnu.org/licenses/>.
-
 import glob
 import logging
 import os
@@ -135,8 +118,6 @@ class NxagentContext(_SimpleX11Context):
     _command = 'nxagent'
 
     def _create_argv(self):
-        # NOTE: Extension MIT-SHM is disabled because it kept crashing Xephyr 21.1.7
-        #       and nxagent/X2Go 4.1.0.3 when moving windows around near screen edges.
         return [
             self._command, '-nolisten', 'tcp', '-ac', '-noshmem', '-R', f':{self._display_number}'
         ]
@@ -146,8 +127,6 @@ class XephyrX11Context(_SimpleX11Context):
     _command = 'Xephyr'
 
     def _create_argv(self):
-        # NOTE: Extension MIT-SHM is disabled because it kept crashing Xephyr 21.1.7
-        #       and nxagent/X2Go 4.1.0.3 when moving windows around near screen edges.
         return [
             self._command, '-screen', self._geometry, '-extension', 'MIT-SHM',
             f':{self._display_number}'
@@ -179,16 +158,10 @@ class XpraContext(_X11Context):
                 args=(
                     +extension GLX
                     +extension Composite
-                    # NOTE: Extension MIT-SHM is disabled because it kept crashing Xephyr 21.1.7
-                    #       and nxagent/X2Go 4.1.0.3 when moving windows around near screen edges.
                     -extension MIT-SHM
-                    # NOTE: This is the Xpra default, 1024x768x24+32 was rejected in practice.
                     -screen 0 8192x4096x24+32
                     -nolisten tcp
                     -noreset
-                    # NOTE: We are trying to protect the host from the app,
-                    #       *not* the app from the host.
-                    # -auth [..]
                     -dpi 96
                     "$@"
                 )
@@ -197,7 +170,7 @@ class XpraContext(_X11Context):
                 exec Xvfb "${args[@]}"
             """),
                   file=f)
-            os.fchmod(f.fileno(), 0o755)  # i.e. make executable
+            os.fchmod(f.fileno(), 0o755)
 
     def _wait_for_connectable_xpra_server(self, unix_socket_path: str) -> None:
         while True:
@@ -221,11 +194,7 @@ class XpraContext(_X11Context):
         self._write_xvfh_wrapper_script_to(xvfb_wrapper_path)
 
         server_argv = [
-            self._command,
-            'start',
-            # NOTE: This is experimental and some of these options
-            #       may need a closer look and/or re-evaluation.
-            #       Experimental implies risky to depend on for security!
+            self._command, 'start',
             '--attach=no',
             '--bandwidth-limit=0',
             '--bell=no',
@@ -257,8 +226,7 @@ class XpraContext(_X11Context):
             f':{self._display_number}',
         ]
         client_argv = [
-            self._command,
-            'attach',
+            self._command, 'attach',
             f'--sessions-dir={sessions_path}',
             unix_socket_path,
         ]
@@ -285,7 +253,6 @@ class XpraContext(_X11Context):
         for process in (self._client_process, self._server_process):
             if process is None:
                 continue
-            # NOTE: Using SIGTERM only because SIGINT showed backtrace output
             process.send_signal(signal.SIGTERM)
             process.wait()
 
@@ -299,8 +266,6 @@ class XvfbX11Context(_SimpleX11Context):
     _command = 'Xvfb'
 
     def _create_argv(self):
-        # NOTE: Extension MIT-SHM is disabled because it kept crashing Xephyr 21.1.7
-        #       and nxagent/X2Go 4.1.0.3 when moving windows around near screen edges.
         return [
             self._command, '-screen', '0', f'{self._geometry}x24', '-extension', 'MIT-SHM',
             f':{self._display_number}'
@@ -309,8 +274,6 @@ class XvfbX11Context(_SimpleX11Context):
 
 def detect_and_require_nested_x11() -> X11Mode:
     tests = [
-        # NOTE: No Xvfb here because this is meant to be about
-        #       options with user-visible Windows
         [NxagentContext, X11Mode.NXAGENT],
         [XephyrX11Context, X11Mode.XEPHYR],
         [XnestX11Context, X11Mode.XNEST],
