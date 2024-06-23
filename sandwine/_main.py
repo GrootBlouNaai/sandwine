@@ -1,19 +1,16 @@
-# This file is part of the sandwine project.
-#
-# Copyright (c) 2023 Sebastian Pipping <sebastian@pipping.org>
-#
-# sandwine is free software: you can redistribute it and/or modify it under
-# the terms of the GNU General Public License as published by the Free
-# Software Foundation, either version 3 of the License, or (at your option)
-# any later version.
-#
-# sandwine is distributed in the hope that it will be useful, but WITHOUT
-# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
-# more details.
-#
-# You should have received a copy of the GNU General Public License along
-# with sandwine. If not, see <https://www.gnu.org/licenses/>.
+# sandwine - runs Windows applications in a sandboxed environment using Wine and Bubblewrap (Conty from Wish, without the compression)
+
+# Command-line interface to run Windows applications in a sandboxed environment # using Wine and Bubblewrap. 
+# Modular and extensible. Uses the ArgumentParser for command-line argument
+# handling, and various helper functions and classes for specific functionalities such as X11 handling,
+# mount point management, and environment variable setup. The main function orchestrates the execution
+# of the sandboxed application.
+
+
+# The script starts by parsing command-line arguments to configure the sandbox environment. It then sets up
+# the necessary mount points, environment variables, and other configurations. The main function handles
+# the execution of the sandboxed application using subprocess.call, ensuring that the environment is
+# properly isolated and configured before execution.
 
 import logging
 import os
@@ -38,11 +35,13 @@ from sandwine._x11 import X11Display, X11Mode, create_x11_context, detect_and_re
 _logger = logging.getLogger(__name__)
 
 
+# Enum to define access modes for mount points
 class AccessMode(Enum):
     READ_ONLY = 'ro'
     READ_WRITE = 'rw'
 
 
+# Enum to define different mount modes
 class MountMode(Enum):
     DEVTMPFS = auto()
     BIND_RO = auto()
@@ -52,6 +51,7 @@ class MountMode(Enum):
     PROC = auto()
 
 
+# Function to parse command-line arguments
 def parse_command_line(args):
     distribution = metadata('sandwine')
 
@@ -68,112 +68,76 @@ def parse_command_line(args):
         description=distribution['Summary'],
         formatter_class=RawTextHelpFormatter,
         epilog=dedent("""\
-        Software libre licensed under GPL v3 or later.
-        Brought to you by Sebastian Pipping <sebastian@pipping.org>.
+        Software is opensource.
+        Credit to Sebastian Pipping <sebastian@pipping.org>.
 
-        Please report bugs at https://github.com/hartwork/sandwine — thank you!
+        Orignal code from https://github.com/hartwork/sandwine, same functionality dirty codebase
     """),
     )
 
     parser.add_argument('--version', action='version', version=distribution['Version'])
 
-    program = parser.add_argument_group('positional arguments')
-    program.add_argument('argv_0', metavar='PROGRAM', nargs='?', help='command to run')
-    program.add_argument('argv_1_plus',
-                         metavar='ARG',
-                         nargs='*',
-                         help='arguments to pass to PROGRAM')
-
-    x11_args = parser.add_argument_group('X11 arguments')
-    x11_args.set_defaults(x11=X11Mode.NONE)
-    x11_args.add_argument('--x11',
-                          dest='x11',
-                          action='store_const',
-                          const=X11Mode.AUTO,
-                          help='enable nested X11 using X2Go nxagent or Xephyr or Xnest'
-                          ' but not Xvfb and not Xpra'
-                          ' (default: X11 disabled)')
-    x11_args.add_argument('--nxagent',
-                          dest='x11',
-                          action='store_const',
-                          const=X11Mode.NXAGENT,
-                          help='enable nested X11 using X2Go nxagent (default: X11 disabled)')
-    x11_args.add_argument('--xephyr',
-                          dest='x11',
-                          action='store_const',
-                          const=X11Mode.XEPHYR,
-                          help='enable nested X11 using Xephyr (default: X11 disabled)')
-    x11_args.add_argument('--xnest',
-                          dest='x11',
-                          action='store_const',
-                          const=X11Mode.XNEST,
-                          help='enable nested X11 using Xnest (default: X11 disabled)')
-    x11_args.add_argument('--xpra',
-                          dest='x11',
-                          action='store_const',
-                          const=X11Mode.XPRA,
-                          help='enable nested X11 using Xpra (EXPERIMENTAL, CAREFUL!)'
-                          ' (default: X11 disabled)')
-    x11_args.add_argument('--xvfb',
-                          dest='x11',
-                          action='store_const',
-                          const=X11Mode.XVFB,
-                          help='enable nested X11 using Xvfb (default: X11 disabled)')
-    x11_args.add_argument('--host-x11-danger-danger',
-                          dest='x11',
-                          action='store_const',
-                          const=X11Mode.HOST,
-                          help='enable use of host X11 (CAREFUL!) (default: X11 disabled)')
-
-    networking = parser.add_argument_group('networking arguments')
-    networking.add_argument('--network',
-                            action='store_true',
-                            help='enable networking (default: networking disabled)')
-
-    sound = parser.add_argument_group('sound arguments')
-    sound.add_argument('--pulseaudio',
-                       action='store_true',
-                       help='enable sound using PulseAudio (default: sound disabled)')
-
-    mount = parser.add_argument_group('mount arguments')
-    mount.add_argument('--dotwine',
-                       metavar='PATH:{ro,rw}',
-                       help='use PATH for ~/.wine/ (default: use tmpfs, empty and non-persistent)')
-    mount.add_argument('--pass',
-                       dest='extra_binds',
-                       default=[],
-                       action='append',
-                       metavar='PATH:{ro,rw}',
-                       help='bind mount host PATH on PATH (CAREFUL!)')
-
-    general = parser.add_argument_group('general operation arguments')
-    general.add_argument('--configure',
-                         action='store_true',
-                         help='enforce running winecfg before start of PROGRAM'
-                         ' (default: run winecfg as needed)')
-    general.add_argument('--no-pty',
-                         dest='with_pty',
-                         default=True,
-                         action='store_false',
-                         help='refrain from creating a pseudo-terminal'
-                         ', stop protecting against TIOCSTI/TIOCLINUX hijacking (CAREFUL!)'
-                         ' (default: create a pseudo-terminal)')
-    general.add_argument('--no-wine',
-                         dest='with_wine',
-                         default=True,
-                         action='store_false',
-                         help='run PROGRAM without use of Wine'
-                         ' (default: run command "wine PROGRAM [ARG ..]")')
-    general.add_argument('--retry',
-                         dest='second_try',
-                         action='store_true',
-                         help='on non-zero exit code run PROGRAM a second time'
-                         '; helps to workaround weird graphics-related crashes'
-                         ' (default: run command once)')
+    add_positional_arguments(parser)
+    add_x11_arguments(parser)
+    add_networking_arguments(parser)
+    add_sound_arguments(parser)
+    add_mount_arguments(parser)
+    add_general_operation_arguments(parser)
 
     return parser.parse_args(args)
 
 
+# Function to add positional arguments to the argument parser
+def add_positional_arguments(parser):
+    program = parser.add_argument_group('positional arguments')
+    program.add_argument('argv_0', metavar='PROGRAM', nargs='?', help='command to run')
+    program.add_argument('argv_1_plus', metavar='ARG', nargs='*', help='arguments to pass to PROGRAM')
+
+
+# Function to add X11-related arguments to the argument parser
+def add_x11_arguments(parser):
+    x11_args = parser.add_argument_group('X11 arguments')
+    x11_args.set_defaults(x11=X11Mode.NONE)
+    x11_args.add_argument('--x11', dest='x11', action='store_const', const=X11Mode.AUTO, help=dedent('''\
+        enable nested X11 using X2Go nxagent or Xephyr or Xnest
+        but not Xvfb and not Xpra (default: X11 disabled)'''))
+    x11_args.add_argument('--nxagent', dest='x11', action='store_const', const=X11Mode.NXAGENT, help='enable nested X11 using X2Go nxagent (default: X11 disabled)')
+    x11_args.add_argument('--xephyr', dest='x11', action='store_const', const=X11Mode.XEPHYR, help='enable nested X11 using Xephyr (default: X11 disabled)')
+    x11_args.add_argument('--xnest', dest='x11', action='store_const', const=X11Mode.XNEST, help='enable nested X11 using Xnest (default: X11 disabled)')
+    x11_args.add_argument('--xpra', dest='x11', action='store_const', const=X11Mode.XPRA, help='enable nested X11 using Xpra (EXPERIMENTAL, CAREFUL!) (default: X11 disabled)')
+    x11_args.add_argument('--xvfb', dest='x11', action='store_const', const=X11Mode.XVFB, help='enable nested X11 using Xvfb (default: X11 disabled)')
+    x11_args.add_argument('--host-x11-danger-danger', dest='x11', action='store_const', const=X11Mode.HOST, help='enable use of host X11 (CAREFUL!) (default: X11 disabled)')
+
+
+# Function to add networking-related arguments to the argument parser
+def add_networking_arguments(parser):
+    networking = parser.add_argument_group('networking arguments')
+    networking.add_argument('--network', action='store_true', help='enable networking (default: networking disabled)')
+
+
+# Function to add sound-related arguments to the argument parser
+def add_sound_arguments(parser):
+    sound = parser.add_argument_group('sound arguments')
+    sound.add_argument('--pulseaudio', action='store_true', help='enable sound using PulseAudio (default: sound disabled)')
+
+
+# Function to add mount-related arguments to the argument parser
+def add_mount_arguments(parser):
+    mount = parser.add_argument_group('mount arguments')
+    mount.add_argument('--dotwine', metavar='PATH:{ro,rw}', help='use PATH for ~/.wine/ (default: use tmpfs, empty and non-persistent)')
+    mount.add_argument('--pass', dest='extra_binds', default=[], action='append', metavar='PATH:{ro,rw}', help='bind mount host PATH on PATH (CAREFUL!)')
+
+
+# Function to add general operation-related arguments to the argument parser
+def add_general_operation_arguments(parser):
+    general = parser.add_argument_group('general operation arguments')
+    general.add_argument('--configure', action='store_true', help='enforce running winecfg before start of PROGRAM (default: run winecfg as needed)')
+    general.add_argument('--no-pty', dest='with_pty', default=True, action='store_false', help='refrain from creating a pseudo-terminal, stop protecting against TIOCSTI/TIOCLINUX hijacking (CAREFUL!) (default: create a pseudo-terminal)')
+    general.add_argument('--no-wine', dest='with_wine', default=True, action='store_false', help='run PROGRAM without use of Wine (default: run command "wine PROGRAM [ARG ..]")')
+    general.add_argument('--retry', dest='second_try', action='store_true', help='on non-zero exit code run PROGRAM a second time; helps to workaround weird graphics-related crashes (default: run command once)')
+
+
+# Class to build command-line argument vectors
 class ArgvBuilder:
 
     def __init__(self):
@@ -199,10 +163,12 @@ class ArgvBuilder:
             print(f'{prefix}{flat_args}{suffix}', file=target)
 
 
+# Function to ensure a single trailing separator in a path
 def single_trailing_sep(path):
     return path.rstrip(os.sep) + os.sep
 
 
+# Function to parse a path and access mode from a string
 def parse_path_colon_access(candidate):
     error_message = f'Value {candidate!r} does not match pattern "PATH:{{ro,rw}}".'
     if ':' not in candidate:
@@ -217,6 +183,7 @@ def parse_path_colon_access(candidate):
     raise ValueError(error_message)
 
 
+# Dataclass to represent a mount task
 @dataclass
 class MountTask:
     mode: MountMode
@@ -225,10 +192,12 @@ class MountTask:
     required: bool = True
 
 
+# Function to generate a random hostname
 def random_hostname():
     return ''.join(hex(random.randint(0, 15))[2:] for _ in range(12))
 
 
+# Function to create the bubblewrap command-line arguments
 def create_bwrap_argv(config):
     my_home = os.path.expanduser('~')
     mount_tasks = [
@@ -282,41 +251,25 @@ def create_bwrap_argv(config):
         env_tasks['DISPLAY'] = f':{config.x11_display_number}'
 
     # Wine
-    run_winecfg = (X11Mode(config.x11) != X11Mode.NONE
-                   and (config.configure or config.dotwine is None))
+    run_winecfg = (X11Mode(config.x11) != X11Mode.NONE and (config.configure or config.dotwine is None))
     dotwine_target_path = os.path.expanduser('~/.wine')
     if config.dotwine is not None:
         dotwine_source_path, dotwine_access = parse_path_colon_access(config.dotwine)
-
-        if dotwine_access == AccessMode.READ_WRITE:
-            mount_mode = MountMode.BIND_RW
-        else:
-            mount_mode = MountMode.BIND_RO
-
+        mount_mode = MountMode.BIND_RW if dotwine_access == AccessMode.READ_WRITE else MountMode.BIND_RO
         mount_tasks += [MountTask(mount_mode, dotwine_target_path, source=dotwine_source_path)]
 
         if not os.path.exists(dotwine_source_path):
             _logger.info(f'Creating directory {dotwine_source_path!r}...')
             os.makedirs(dotwine_source_path, mode=0o700, exist_ok=True)
             run_winecfg = True
-
-        del dotwine_source_path
-        del dotwine_access
     else:
         mount_tasks += [MountTask(MountMode.TMPFS, dotwine_target_path)]
-    del dotwine_target_path
 
     # Extra binds
     for bind in config.extra_binds:
-        mount_target_orig, mount_access = parse_path_colon_access(bind)
-        mount_target = os.path.abspath(mount_target_orig)
-        del mount_target_orig
-        if mount_access == AccessMode.READ_WRITE:
-            mount_mode = MountMode.BIND_RW
-        else:
-            mount_mode = MountMode.BIND_RO
-        mount_tasks += [MountTask(mount_mode, mount_target)]
-        del mount_target, mount_access
+        mount_target, mount_access = parse_path_colon_access(bind)
+        mount_mode = MountMode.BIND_RW if mount_access == AccessMode.READ_WRITE else MountMode.BIND_RO
+        mount_tasks += [MountTask(mount_mode, os.path.abspath(mount_target))]
 
     # Program
     if os.sep in (config.argv_0 or ''):
@@ -332,7 +285,6 @@ def create_bwrap_argv(config):
 
     # Mount stack
     sorted_mount_tasks = sorted(mount_tasks, key=attrgetter('target'))
-    del mount_tasks
 
     for mount_task in sorted_mount_tasks:
         if mount_task.mode == MountMode.TMPFS:
@@ -345,18 +297,12 @@ def create_bwrap_argv(config):
             if mount_task.source is None:
                 mount_task.source = mount_task.target
 
-            # NOTE: The X11 Unix socket will only show up later
-            keep_missing_source = X11Mode(
-                config.x11) != X11Mode.NONE and mount_task.target == x11_unix_socket
-
-            if not os.path.exists(mount_task.source) and not keep_missing_source:
+            if not os.path.exists(mount_task.source) and not (X11Mode(config.x11) != X11Mode.NONE and mount_task.target == x11_unix_socket):
                 if mount_task.required:
-                    _logger.error(
-                        f'Path {mount_task.source!r} does not exist on the host, aborting.')
+                    _logger.error(f'Path {mount_task.source!r} does not exist on the host, aborting.')
                     sys.exit(1)
                 else:
-                    _logger.debug(f'Path {mount_task.source!r} does not exist on the host'
-                                  ', dropped from mount tasks.')
+                    _logger.debug(f'Path {mount_task.source!r} does not exist on the host, dropped from mount tasks.')
                     continue
 
             if mount_task.mode == MountMode.BIND_RO:
@@ -365,26 +311,12 @@ def create_bwrap_argv(config):
                 argv.add('--bind', mount_task.source, mount_task.target)
             elif mount_task.mode == MountMode.BIND_DEV:
                 argv.add('--dev-bind', mount_task.source, mount_task.target)
-            else:
-                assert False, f'Mode {mount_task.mode} not supported'
         else:
             assert False, f'Mode {mount_task.mode} unknown'
 
     # Filter ${PATH}
-    candidate_paths = os.environ['PATH'].split(os.pathsep)
-    candidate_paths.append('/usr/lib/wine')  # for wineserver on e.g. Debian
-    available_paths = []
-    for candidate_path in candidate_paths:
-        candidate_path = os.path.realpath(candidate_path)
-        for mount_task in reversed(sorted_mount_tasks):
-            if single_trailing_sep(candidate_path).startswith(single_trailing_sep(
-                    mount_task.target)):
-                if mount_task.mode in (MountMode.BIND_RO, MountMode.BIND_RW, MountMode.BIND_DEV):
-                    available_paths.append(candidate_path)
-                    break
-        else:
-            _logger.debug(f'Path {candidate_path!r} will not exist in sandbox mount stack'
-                          ', dropped from ${PATH}.')
+    candidate_paths = os.environ['PATH'].split(os.pathsep) + ['/usr/lib/wine']
+    available_paths = [candidate_path for candidate_path in map(os.path.realpath, candidate_paths) if any(single_trailing_sep(candidate_path).startswith(single_trailing_sep(mount_task.target)) and mount_task.mode in (MountMode.BIND_RO, MountMode.BIND_RW, MountMode.BIND_DEV) for mount_task in reversed(sorted_mount_tasks))]
     env_tasks['PATH'] = os.pathsep.join(available_paths)
 
     # Create environment (meaning environment variables)
@@ -412,19 +344,10 @@ def create_bwrap_argv(config):
 
     # Add Wine and PTY
     if config.argv_0 is not None:
-        # Add Wine
-        inner_argv = []
-        if config.with_wine:
-            inner_argv.append('wine')
-        inner_argv.append(config.argv_0)
+        inner_argv = ['wine', config.argv_0] if config.with_wine else [config.argv_0]
         inner_argv.extend(config.argv_1_plus)
 
-        # Add PTY
         if config.with_pty:
-            # NOTE: This implementation is known to not support Ctrl+Z (SIGTSTP).
-            #       Implementing something with Ctrl+Z support is complex and planned for later.
-            #       The current approach is inspired by ptysolate by Jakub Wilk:
-            #       https://github.com/jwilk/ptysolate
             argv.add('script', '-e', '-q', '-c', f'exec {shlex.join(inner_argv)}', '/dev/null')
         else:
             argv.add(*inner_argv)
@@ -434,14 +357,15 @@ def create_bwrap_argv(config):
     return argv
 
 
+# Function to ensure that the bubblewrap version is recent enough
 def require_recent_bubblewrap():
     argv = ['bwrap', '--disable-userns', '--help']
     if subprocess.call(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
-        _logger.error('sandwine requires bubblewrap >=0.8.0'
-                      ', aborting.')
+        _logger.error('sandwine requires bubblewrap >=0.8.0, aborting.')
         sys.exit(1)
 
 
+# Main function to orchestrate the execution of the sandboxed application
 def main():
     exit_code = 0
     try:
